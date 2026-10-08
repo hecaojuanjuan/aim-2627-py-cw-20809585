@@ -70,7 +70,91 @@ def status_report(name, robot_type, hp, max_hp, battery):
 def analyze_damage_log(lines):
     """TODO(Q2)：解析混合格式伤害日志，返回固定契约的统计 dict；
     行格式、去重与统计口径见题面 Q2 规范。"""
-    raise NotImplementedError("Q2 analyze_damage_log：题面 Q2·多源日志解析与统计")
+    by_armor = {
+        "front": 0,
+        "left": 0,
+        "right": 0,
+    }
+
+    armor_map = {
+        "F": "front",
+        "L": "left",
+        "R": "right",
+    }
+
+    seen_ids = set()
+    event_count = 0
+
+    for raw_line in lines:
+        if not isinstance(raw_line, str):
+            continue
+
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+
+        if line.startswith("{"):
+            try:
+                record = json.loads(line)
+                armor = record.get("armor")
+                damage = record.get("damage")
+
+                if not isinstance(armor, str) or armor not in by_armor:
+                    continue
+
+                if type(damage) is not int or damage <= 0:
+                    continue
+
+                if "id" in record:
+                    event_id = record["id"]
+                    if event_id in seen_ids:
+                        continue
+                    seen_ids.add(event_id)
+
+            except (ValueError, TypeError, RecursionError):
+                continue
+
+            events = [(armor, damage)]
+
+        else:
+            events = []
+
+            for segment in line.split(","):
+                match = re.fullmatch(
+                    r"([FLR]):([0-9]+)", segment.strip()
+                )
+
+                if match is None:
+                    events = []
+                    break
+
+                try:
+                    damage = int(match.group(2))
+                except ValueError:
+                    events = []
+                    break
+
+                if damage <= 0:
+                    events = []
+                    break
+
+                armor = armor_map[match.group(1)]
+                events.append((armor, damage))
+
+        for armor, damage in events:
+            by_armor[armor] += damage
+            event_count += 1
+
+    total = sum(by_armor.values())
+    most_hit = max(by_armor, key=by_armor.get) if event_count else None
+    avg = round(total / event_count, 2) if event_count else 0.0
+
+    return {
+        "total": total,
+        "by_armor": by_armor,
+        "most_hit": most_hit,
+        "avg": avg,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -160,25 +244,60 @@ class SentryGrid:
     @current_pos.setter
     def current_pos(self, value):
         """TODO(Q3)：位置 setter；三重输入校验见题面 Q3 规范第 1 条。"""
-        raise NotImplementedError("Q3 current_pos.setter：题面 Q3·位置校验三步")
+        if not isinstance(value, (tuple, list)):
+            raise TypeError("位置必须为 tuple 或 list")
+
+        if len(value) != 2:
+            raise TypeError("坐标必须包含两个元素")
+
+        pos = self._clamp_cell(value)
+
+        if pos in self._obstacles:
+            raise ValueError("位置不能在障碍物上")
+
+        self._pos = pos
 
     def move_forward(self):
         """TODO(Q3)：朝当前 facing 前进一格，返回执行后的位置；
         碰撞、耗电与断电语义见题面 Q3 规范。"""
-        raise NotImplementedError("Q3 move_forward：题面 Q3·前进、碰撞与断电")
+        if self._fuel <= 0:
+            return self._pos
+
+        self._fuel -= 1
+
+        dx, dy = self._facing.delta
+        x, y = self._pos
+
+        new_pos = (x + dx, y + dy)
+
+        if self.is_blocked(*new_pos):
+            self._collision_count += 1
+        else:
+            self.current_pos = new_pos
+
+        return self._pos
 
     def turn_left(self):
         """TODO(Q3)：原地左转 90°，返回新的 Facing（不耗电）。"""
-        raise NotImplementedError("Q3 turn_left")
+        dx, dy = self._facing.delta
+
+        self._facing = Facing((-dy, dx))
+
+        return self._facing
 
     def turn_right(self):
         """TODO(Q3)：原地右转 90°，返回新的 Facing（不耗电）。"""
-        raise NotImplementedError("Q3 turn_right")
+        dx, dy = self._facing.delta
 
+        self._facing = Facing((dy, -dx))
+
+        return self._facing
 
 # ---------------------------------------------------------------------------
 # Q4 贪心导航（题面 Q4·单步贪心导航策略）
 # ---------------------------------------------------------------------------
+
+
 def next_step_toward(pos, target, obstacles, current_facing=Facing.UP):
     """TODO(Q4)：返回下一步应朝向的 Facing；
     候选判定、优先级与回退规则见题面 Q4 规范。"""
