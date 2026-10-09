@@ -245,15 +245,15 @@ class SentryGrid:
     def current_pos(self, value):
         """TODO(Q3)：位置 setter；三重输入校验见题面 Q3 规范第 1 条。"""
         if not isinstance(value, (tuple, list)):
-            raise TypeError("位置必须为 tuple 或 list")
+            raise TypeError("Position must be a tuple or list")
 
         if len(value) != 2:
-            raise TypeError("坐标必须包含两个元素")
+            raise TypeError("Position must contain two coordinates")
 
         pos = self._clamp_cell(value)
 
         if pos in self._obstacles:
-            raise ValueError("位置不能在障碍物上")
+            raise ValueError("Position cannot overlap an obstacle")
 
         self._pos = pos
 
