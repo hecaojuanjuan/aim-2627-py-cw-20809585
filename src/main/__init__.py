@@ -301,7 +301,35 @@ class SentryGrid:
 def next_step_toward(pos, target, obstacles, current_facing=Facing.UP):
     """TODO(Q4)：返回下一步应朝向的 Facing；
     候选判定、优先级与回退规则见题面 Q4 规范。"""
-    raise NotImplementedError("Q4 next_step_toward：题面 Q4·贪心策略与回退")
+    x, y = pos
+    tx, ty = target
+
+    dx = tx - x
+    dy = ty - y
+
+    candidates = []
+
+    if dx > 0:
+        candidates.append(Facing.RIGHT)
+    elif dx < 0:
+        candidates.append(Facing.LEFT)
+
+    if dy > 0:
+        candidates.append(Facing.UP)
+    elif dy < 0:
+        candidates.append(Facing.DOWN)
+
+    if abs(dy) > abs(dx):
+        candidates.reverse()
+
+    for facing in candidates:
+        step_x, step_y = facing.delta
+        next_pos = (x + step_x, y + step_y)
+
+        if next_pos not in obstacles:
+            return facing
+
+    return current_facing
 
 
 # ---------------------------------------------------------------------------
@@ -320,7 +348,100 @@ class SentryState(Enum):
 def decide(sensor, state, hp, heat):
     """TODO(Q5)：纯函数决策，返回 (action: str, new_state: SentryState)；
     sensor 字段契约、R1-R7 规则表与非法输入处理见题面 Q5 规范。"""
-    raise NotImplementedError("Q5 decide：题面 Q5·决策规则表 R1-R7")
+    if not isinstance(sensor, dict):
+        raise ValueError("Invalid sensor")
+
+    if not isinstance(state, SentryState):
+        raise ValueError("Invalid state")
+
+    required = {
+        "enemy_frames",
+        "enemy_dist",
+        "robot_type",
+        "max_hp"
+    }
+
+    if not required.issubset(sensor):
+        raise ValueError("Missing fields")
+
+    frames = sensor["enemy_frames"]
+
+    if isinstance(frames, (list, tuple)):
+        if not 1 <= len(frames) <= 6:
+            raise ValueError("Invalid frames")
+    else:
+        frames = (False,)
+
+    frames = tuple(bool(x) for x in frames)
+
+    try:
+        hp_pct = hp_ratio(
+            float(hp),
+            float(sensor["max_hp"])
+        )
+    except (TypeError, ValueError, OverflowError):
+        hp_pct = 0
+
+    visible = frames[-1]
+    enemy_dist = sensor["enemy_dist"]
+
+    if type(enemy_dist) is not int:
+        enemy_dist = float("inf")
+
+    robot_type = sensor["robot_type"]
+
+    if isinstance(robot_type, str):
+        robot_type = robot_type.strip().upper()
+    else:
+        robot_type = "INFANTRY"
+
+    if hp_pct <= 30:
+        return ("RETREAT", SentryState.RETREAT)
+
+    if state == SentryState.RETREAT:
+        return ("RETURN", SentryState.RETURN)
+
+    if state == SentryState.RETURN:
+        return ("MOVE_BASE", SentryState.PATROL)
+
+    def engage_action():
+        if enemy_dist <= 3:
+            return ("SHOOT", SentryState.ENGAGE)
+
+        if robot_type == "HERO":
+            return ("MOVE_RIGHT", SentryState.ENGAGE)
+
+        return ("MOVE_LEFT", SentryState.ENGAGE)
+
+    if state == SentryState.ENGAGE:
+        if visible:
+            return engage_action()
+
+        recently_visible = (
+            len(frames) >= 2 and frames[-2]
+        )
+
+        if recently_visible:
+            return ("HOLD_FIRE", SentryState.ENGAGE)
+
+        return ("SCAN", SentryState.SUSPECT)
+
+    if visible:
+        confirmed = (
+            len(frames) >= 2
+            and frames[-1]
+            and frames[-2]
+        )
+
+        if confirmed:
+            return engage_action()
+
+        return ("SCAN", SentryState.SUSPECT)
+
+    if state == SentryState.PATROL:
+        return ("PATROL_MOVE", SentryState.PATROL)
+
+    return ("SCAN", SentryState.SUSPECT)
 
 
 # ---------------------------------------------------------------------------
@@ -329,12 +450,86 @@ def decide(sensor, state, hp, heat):
 def run_patrol(grid, max_steps=500):
     """TODO(Q6)：sense → decide → act 主循环；
     循环结构、终止条件、脱困自由度与统计返回契约见题面 Q6 规范。"""
-    raise NotImplementedError("Q6 run_patrol：题面 Q6·主循环与统计契约")
+    steps = 0
+    visited = {grid.current_pos}
+    escape_route = deque()
+
+    def find_escape_route():
+        start = grid.current_pos
+        queue = deque([start])
+        parents = {start: None}
+
+        while queue:
+            pos = queue.popleft()
+
+            if pos == grid.enemy_pos:
+                route = deque()
+                while parents[pos] is not None:
+                    previous, facing = parents[pos]
+                    route.appendleft(facing)
+                    pos = previous
+                return route
+
+            for facing in Facing:
+                dx, dy = facing.delta
+                next_pos = (pos[0] + dx, pos[1] + dy)
+
+                if next_pos in parents or grid.is_blocked(*next_pos):
+                    continue
+
+                parents[next_pos] = (pos, facing)
+                queue.append(next_pos)
+
+        return deque()
+
+    while (
+        steps < max_steps
+        and grid.fuel > 0
+        and not grid.found_enemy
+    ):
+        pos = grid.current_pos
+        target = grid.enemy_pos
+        facing = next_step_toward(
+            pos, target, grid.obstacles, grid.facing
+        )
+
+        if escape_route:
+            facing = escape_route.popleft()
+        else:
+            dx, dy = facing.delta
+            next_pos = (pos[0] + dx, pos[1] + dy)
+            distance = abs(target[0] - pos[0]) + abs(target[1] - pos[1])
+            next_distance = (
+                abs(target[0] - next_pos[0])
+                + abs(target[1] - next_pos[1])
+            )
+
+            if grid.is_blocked(*next_pos) or next_distance >= distance:
+                escape_route = find_escape_route()
+                if not escape_route:
+                    break
+                facing = escape_route.popleft()
+
+        while grid.facing is not facing:
+            grid.turn_right()
+
+        grid.move_forward()
+        steps += 1
+        visited.add(grid.current_pos)
+
+    success = grid.found_enemy
+    return {
+        "steps": steps,
+        "collisions": grid.collision_count,
+        "visited_count": len(visited),
+        "found_enemy": success,
+        "success": success,
+    }
 
 
 def report_to_json(stats):
     """TODO(Q6)：把 stats 序列化为确定性的 JSON 字符串，见题面 Q6 规范。"""
-    raise NotImplementedError("Q6 report_to_json：题面 Q6·报告序列化")
+    return json.dumps(stats, sort_keys=True, ensure_ascii=False)
 
 
 # ---------------------------------------------------------------------------
